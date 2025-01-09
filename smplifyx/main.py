@@ -25,6 +25,8 @@ import os
 import os.path as osp
 
 import time
+
+import numpy as np
 import yaml
 import torch
 
@@ -37,8 +39,17 @@ from fit_single_frame import fit_single_frame
 
 from camera import create_camera
 from prior import create_prior
+import PIL.Image as pil_img
 
 torch.backends.cudnn.enabled = False
+
+
+def count_invalid_kpts(keypoints2d):
+    count =0
+    for keypoint in keypoints2d:
+        if keypoint[0]==0 and keypoint[1]==0:
+            count+=1
+    return count
 
 
 def main(**args):
@@ -197,12 +208,12 @@ def main(**args):
                                                        dtype=dtype)
     # Add a fake batch dimension for broadcasting
     joint_weights.unsqueeze_(dim=0)
-
+    print("The number of images in the dataset:", len(dataset_obj))
     for idx, data in enumerate(dataset_obj):
-
         img = data['img']
         fn = data['fn']
         keypoints = data['keypoints']
+        keypoints3d = data['keypoints3d']
         print('Processing: {}'.format(data['img_path']))
 
         curr_result_folder = osp.join(result_folder, fn)
@@ -211,7 +222,11 @@ def main(**args):
         curr_mesh_folder = osp.join(mesh_folder, fn)
         if not osp.exists(curr_mesh_folder):
             os.makedirs(curr_mesh_folder)
+
+        print("The number of people in the image: ", keypoints.shape[0])
         for person_id in range(keypoints.shape[0]):
+            if count_invalid_kpts(keypoints[person_id]) >= 10:
+                continue
             if person_id >= max_persons and max_persons > 0:
                 continue
 
@@ -220,10 +235,13 @@ def main(**args):
             curr_mesh_fn = osp.join(curr_mesh_folder,
                                     '{:03d}.obj'.format(person_id))
 
-            curr_img_folder = osp.join(output_folder, 'images', fn,
-                                       '{:03d}'.format(person_id))
+            curr_img_folder = osp.join(output_folder, 'images')
             if not osp.exists(curr_img_folder):
-                os.makedirs(curr_img_folder)
+                os.makedirs(curr_img_folder, exist_ok=True)
+            # out_img_fn = osp.join(curr_img_folder,
+            #                       '{:03d}.png'.format(person_id))
+            out_img_fn = osp.join(curr_img_folder, f'{fn}.png')
+
 
             if gender_lbl_type != 'none':
                 if gender_lbl_type == 'pd' and 'gender_pd' in data:
@@ -240,9 +258,9 @@ def main(**args):
             elif gender == 'male':
                 body_model = male_model
 
-            out_img_fn = osp.join(curr_img_folder, 'output.png')
 
-            fit_single_frame(img, keypoints[[person_id]],
+
+            out_img = fit_single_frame(img, keypoints[[person_id]],keypoints3d[[person_id]],
                              body_model=body_model,
                              camera=camera,
                              joint_weights=joint_weights,
@@ -260,6 +278,11 @@ def main(**args):
                              jaw_prior=jaw_prior,
                              angle_prior=angle_prior,
                              **args)
+            img = out_img
+        img = pil_img.fromarray((img * 255).astype(np.uint8))
+        img.save(out_img_fn)
+
+
 
     elapsed = time.time() - start
     time_msg = time.strftime('%H hours, %M minutes, %S seconds',

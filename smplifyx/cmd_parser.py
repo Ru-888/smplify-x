@@ -37,7 +37,7 @@ def parse_config(argv=None):
     parser.add_argument('--data_folder',
                         default=os.getcwd(),
                         help='The directory that contains the data.')
-    parser.add_argument('--max_persons', type=int, default=3,
+    parser.add_argument('--max_persons', type=int, default=10,
                         help='The maximum number of persons to process')
     parser.add_argument('-c', '--config',
                         required=True, is_config_file=True,
@@ -176,10 +176,42 @@ def parse_config(argv=None):
 
     parser.add_argument('--prior_folder', type=str, default='prior',
                         help='The folder where the prior is stored')
+
+    # camera
     parser.add_argument('--focal_length',
                         default=5000,
                         type=float,
                         help='Value of focal length.')
+    # parser.add_argument('--focal_length_x',
+    #                     default=5000,
+    #                     type=float,
+    #                     help='Value of focal length x.')
+    # parser.add_argument('--focal_length_y',
+    #                     default=5000,
+    #                     type=float,
+    #                     help='Value of focal length y.')
+    parser.add_argument('--center', nargs='*', type=float,
+                        default=[1000, 540],
+                        help='Translation matrix of the camera')
+    # Intrinsic
+    parser.add_argument('--K', nargs='*', type=float,
+                        default=[1, 0, 0,0, 1, 0,0, 0, 1],
+                        help='Camera Intrinsic Matrix')
+    parser.add_argument('--dist_coeffs', nargs='*', type=float,
+                        default=[0, 0, 0, 0],
+                        help='Camera dist_coeffs')
+    # External
+    parser.add_argument('--rotation', nargs='*', type=float,
+                        default=[1, 0, 0, 0, 1, 0, 0, 0, 1],
+                        help='Rotation matrix of the camera')
+    parser.add_argument('--translation', nargs='*', type=float,
+                        default=[0, 0, 0],
+                        help='Translation matrix of the camera')
+
+
+
+
+
     parser.add_argument('--rho',
                         default=100,
                         type=float,

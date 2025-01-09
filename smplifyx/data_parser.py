@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 
 # Max-Planck-Gesellschaft zur Förderung der Wissenschaften e.V. (MPG) is
@@ -37,7 +38,7 @@ from torch.utils.data import Dataset
 from utils import smpl_to_openpose
 
 Keypoints = namedtuple('Keypoints',
-                       ['keypoints', 'gender_gt', 'gender_pd'])
+                       ['keypoints', 'keypoints3d', 'gender_gt', 'gender_pd'])
 
 Keypoints.__new__.__defaults__ = (None,) * len(Keypoints._fields)
 
@@ -55,13 +56,17 @@ def read_keypoints(keypoint_fn, use_hands=True, use_face=True,
         data = json.load(keypoint_file)
 
     keypoints = []
-
+    keypoints3d = []
     gender_pd = []
     gender_gt = []
     for idx, person_data in enumerate(data['people']):
         body_keypoints = np.array(person_data['pose_keypoints_2d'],
                                   dtype=np.float32)
         body_keypoints = body_keypoints.reshape([-1, 3])
+
+        body_keypoints3d = np.array(person_data['pose_keypoints_3d'],
+                                    dtype=np.float32)
+        body_keypoints3d = body_keypoints3d.reshape([-1, 4])
         if use_hands:
             left_hand_keyp = np.array(
                 person_data['hand_left_keypoints_2d'],
@@ -95,8 +100,9 @@ def read_keypoints(keypoint_fn, use_hands=True, use_face=True,
             gender_gt.append(person_data['gender_gt'])
 
         keypoints.append(body_keypoints)
+        keypoints3d.append(body_keypoints3d)
 
-    return Keypoints(keypoints=keypoints, gender_pd=gender_pd,
+    return Keypoints(keypoints=keypoints, keypoints3d=keypoints3d, gender_pd=gender_pd,
                      gender_gt=gender_gt)
 
 
@@ -187,10 +193,10 @@ class OpenPose(Dataset):
         if len(keyp_tuple.keypoints) < 1:
             return {}
         keypoints = np.stack(keyp_tuple.keypoints)
-
+        keypoints3d = np.stack(keyp_tuple.keypoints3d)
         output_dict = {'fn': img_fn,
                        'img_path': img_path,
-                       'keypoints': keypoints, 'img': img}
+                       'keypoints': keypoints,'keypoints3d': keypoints3d,  'img': img}
         if keyp_tuple.gender_gt is not None:
             if len(keyp_tuple.gender_gt) > 0:
                 output_dict['gender_gt'] = keyp_tuple.gender_gt

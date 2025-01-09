@@ -23,6 +23,7 @@ from collections import namedtuple
 
 import torch
 import torch.nn as nn
+import numpy as np
 
 from smplx.lbs import transform_mat
 
@@ -45,7 +46,7 @@ class PerspectiveCamera(nn.Module):
 
     def __init__(self, rotation=None, translation=None,
                  focal_length_x=None, focal_length_y=None,
-                 batch_size=1,
+                 batch_size=1, K=None, dist_coeffs=None,
                  center=None, dtype=torch.float32, **kwargs):
         super(PerspectiveCamera, self).__init__()
         self.batch_size = batch_size
@@ -54,7 +55,7 @@ class PerspectiveCamera(nn.Module):
         # the camera matrix
         self.register_buffer('zero',
                              torch.zeros([batch_size], dtype=dtype))
-
+        print("Data type of focal_length_x and focal_length_y: ", type(focal_length_x), type(focal_length_y))
         if focal_length_x is None or type(focal_length_x) == float:
             focal_length_x = torch.full(
                 [batch_size],
@@ -68,23 +69,35 @@ class PerspectiveCamera(nn.Module):
                 self.FOCAL_LENGTH if focal_length_y is None else
                 focal_length_y,
                 dtype=dtype)
-
+        print("focal_length_x and focal_length_y: ", focal_length_x, focal_length_y)
         self.register_buffer('focal_length_x', focal_length_x)
         self.register_buffer('focal_length_y', focal_length_y)
 
         if center is None:
             center = torch.zeros([batch_size, 2], dtype=dtype)
+        else:
+            center = torch.tensor(center, dtype=dtype)
+            center = center.repeat(batch_size, 1)
         self.register_buffer('center', center)
+        print("center", center.shape, self.center)
+        self.register_buffer('K', torch.tensor(np.array(K).reshape(3, 3), dtype=dtype))
+        self.register_buffer('dist_coeffs', torch.tensor(np.array(dist_coeffs), dtype=dtype))
 
         if rotation is None:
             rotation = torch.eye(
                 3, dtype=dtype).unsqueeze(dim=0).repeat(batch_size, 1, 1)
+        else:
+            rotation = torch.tensor(np.array(rotation).reshape(3, 3), dtype=dtype).unsqueeze(dim=0).repeat(batch_size, 1, 1)
+        print('PerspectiveCamera: rotation ', rotation)
 
         rotation = nn.Parameter(rotation, requires_grad=True)
         self.register_parameter('rotation', rotation)
 
         if translation is None:
             translation = torch.zeros([batch_size, 3], dtype=dtype)
+        else:
+            translation = torch.tensor([translation] * batch_size, dtype=dtype)
+        print("translation: ", translation.shape, translation)
 
         translation = nn.Parameter(translation,
                                    requires_grad=True)

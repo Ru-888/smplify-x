@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 
 # Max-Planck-Gesellschaft zur Förderung der Wissenschaften e.V. (MPG) is
@@ -36,6 +37,7 @@ import utils
 @torch.no_grad()
 def guess_init(model,
                joints_2d,
+               gt_joints_3d,
                edge_idxs,
                focal_length=5000,
                pose_embedding=None,
@@ -81,13 +83,13 @@ def guess_init(model,
 
     output = model(body_pose=body_pose, return_verts=False,
                    return_full_pose=False)
-    joints_3d = output.joints
-    joints_2d = joints_2d.to(device=joints_3d.device)
+    # joints_3d = output.joints
+    joints_2d = joints_2d.to(device=gt_joints_3d.device)
 
     diff3d = []
     diff2d = []
     for edge in edge_idxs:
-        diff3d.append(joints_3d[:, edge[0]] - joints_3d[:, edge[1]])
+        diff3d.append(gt_joints_3d[:, edge[0]] - gt_joints_3d[:, edge[1]])
         diff2d.append(joints_2d[:, edge[0]] - joints_2d[:, edge[1]])
 
     diff3d = torch.stack(diff3d, dim=1)
@@ -102,8 +104,8 @@ def guess_init(model,
     est_d = focal_length * (height3d / height2d)
 
     # just set the z value
-    batch_size = joints_3d.shape[0]
-    x_coord = torch.zeros([batch_size], device=joints_3d.device,
+    batch_size = gt_joints_3d.shape[0]
+    x_coord = torch.zeros([batch_size], device=gt_joints_3d.device,
                           dtype=dtype)
     y_coord = x_coord.clone()
     init_t = torch.stack([x_coord, y_coord, est_d], dim=1)
@@ -215,7 +217,7 @@ class FittingMonitor(object):
 
     def create_fitting_closure(self,
                                optimizer, body_model, camera=None,
-                               gt_joints=None, loss=None,
+                               gt_joints=None, gt_joints3d=None, loss=None,
                                joints_conf=None,
                                joint_weights=None,
                                return_verts=True, return_full_pose=False,
@@ -239,11 +241,13 @@ class FittingMonitor(object):
                                          dtype=body_pose.dtype,
                                          device=body_pose.device)
                 body_pose = torch.cat([body_pose, wrist_pose], dim=1)
-
+            # 调用身体模型进行前向传播，根据参数返回顶点和完整的姿态
             body_model_output = body_model(return_verts=return_verts,
                                            body_pose=body_pose,
                                            return_full_pose=return_full_pose)
+            # print("body_model_output:", body_model_output)
             total_loss = loss(body_model_output, camera=camera,
+                              gt_joints3d=gt_joints3d,
                               gt_joints=gt_joints,
                               body_model_faces=faces_tensor,
                               joints_conf=joints_conf,
@@ -251,7 +255,7 @@ class FittingMonitor(object):
                               pose_embedding=pose_embedding,
                               use_vposer=use_vposer,
                               **kwargs)
-
+            # 如果 backward 为 True，则进行后向传播，计算梯度。
             if backward:
                 total_loss.backward(create_graph=create_graph)
 
@@ -362,11 +366,12 @@ class SMPLifyLoss(nn.Module):
                                                  device=weight_tensor.device)
                 setattr(self, key, weight_tensor)
 
-    def forward(self, body_model_output, camera, gt_joints, joints_conf,
+    def forward(self, body_model_output, camera, gt_joints,gt_joints3d, joints_conf,
                 body_model_faces, joint_weights,
                 use_vposer=False, pose_embedding=None,
                 **kwargs):
         projected_joints = camera(body_model_output.joints)
+
         # Calculate the weights for each joints
         weights = (joint_weights * joints_conf
                    if self.use_joints_conf else
@@ -376,6 +381,11 @@ class SMPLifyLoss(nn.Module):
         # the ground truth 2D detections
         joint_diff = self.robustifier(gt_joints - projected_joints)
         joint_loss = (torch.sum(weights ** 2 * joint_diff) *
+                      self.data_weight ** 2)
+        # 3d joint loss
+        output_joints = body_model_output.joints
+        joint3d_diff = self.robustifier(gt_joints3d - output_joints)
+        joint3d_loss = (torch.sum(weights ** 2 * joint3d_diff) *
                       self.data_weight ** 2)
 
         # Calculate the loss from the Pose prior
@@ -442,10 +452,16 @@ class SMPLifyLoss(nn.Module):
                     self.coll_loss_weight *
                     self.pen_distance(triangles, collision_idxs))
 
-        total_loss = (joint_loss + pprior_loss + shape_loss +
+        total_loss = (joint_loss + joint3d_loss + pprior_loss + shape_loss +
                       angle_prior_loss + pen_loss +
                       jaw_prior_loss + expression_loss +
                       left_hand_prior_loss + right_hand_prior_loss)
+        # total_loss = (joint_loss + joint3d_loss + pprior_loss + shape_loss +
+        #               angle_prior_loss + pen_loss +
+        #               jaw_prior_loss + expression_loss +
+        #               left_hand_prior_loss + right_hand_prior_loss)
+        # print("SMPLifyLoss: joint_loss", joint_loss)
+        # print("SMPLifyLoss: joint3d_loss", joint3d_loss)
         return total_loss
 
 
@@ -483,21 +499,30 @@ class SMPLifyCameraInitLoss(nn.Module):
                                              device=weight_tensor.device)
                 setattr(self, key, weight_tensor)
 
-    def forward(self, body_model_output, camera, gt_joints,
+    def forward(self, body_model_output, camera, gt_joints, gt_joints3d,
                 **kwargs):
 
         projected_joints = camera(body_model_output.joints)
-
+        # print("shape of gt_joints: ", gt_joints.shape)
+        # print("shape of gt_joints3d: ", gt_joints3d.shape)
+        # print("shape of projected_joints: ", projected_joints.shape)
         joint_error = torch.pow(
             torch.index_select(gt_joints, 1, self.init_joints_idxs) -
             torch.index_select(projected_joints, 1, self.init_joints_idxs),
             2)
         joint_loss = torch.sum(joint_error) * self.data_weight ** 2
+        # print("self.data_weight: ", self.data_weight)
+        # 3d joints loss
+        output_joints = body_model_output.joints
+        diff = torch.index_select(gt_joints3d, 1, self.init_joints_idxs) - torch.index_select(output_joints, 1, self.init_joints_idxs)
 
+        joint3d_error = torch.pow(diff, 2)
+        joint3d_loss = torch.sum(joint3d_error) * self.data_weight ** 2
+        # print("SMPLifyCameraInitLoss: joint_loss, joint3d_loss ", joint_loss, joint3d_loss)
         depth_loss = 0.0
         if (self.depth_loss_weight.item() > 0 and self.trans_estimation is not
                 None):
             depth_loss = self.depth_loss_weight ** 2 * torch.sum((
                 camera.translation[:, 2] - self.trans_estimation[:, 2]).pow(2))
 
-        return joint_loss + depth_loss
+        return joint_loss + depth_loss + joint3d_loss

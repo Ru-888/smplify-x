@@ -21,6 +21,9 @@ from __future__ import division
 
 
 import time
+
+from numpy.ma.core import shape
+
 try:
     import cPickle as pickle
 except ImportError:
@@ -48,6 +51,7 @@ from human_body_prior.tools.model_loader import load_vposer
 
 def fit_single_frame(img,
                      keypoints,
+                     keypoints3d,
                      body_model,
                      camera,
                      joint_weights,
@@ -197,11 +201,18 @@ def fit_single_frame(img,
 
     keypoint_data = torch.tensor(keypoints, dtype=dtype)
     gt_joints = keypoint_data[:, :, :2]
-    if use_joints_conf:
-        joints_conf = keypoint_data[:, :, 2].reshape(1, -1)
+    # if use_joints_conf:
+    #     joints_conf = keypoint_data[:, :, 2].reshape(1, -1)
 
+    keypoint_data = torch.tensor(keypoints3d, dtype=dtype)
+    gt_joints3d = keypoint_data[:, :, :3]
+    if use_joints_conf:
+        joints_conf = keypoint_data[:, :, 3].reshape(1, -1)
+    print("gt_joints: ", gt_joints.shape, gt_joints)
+    print("gt_joints3d: ", gt_joints3d.shape, gt_joints3d)
     # Transfer the data to the correct device
     gt_joints = gt_joints.to(device=device, dtype=dtype)
+    gt_joints3d = gt_joints3d.to(device=device, dtype=dtype)
     if use_joints_conf:
         joints_conf = joints_conf.to(device=device, dtype=dtype)
 
@@ -266,19 +277,21 @@ def fit_single_frame(img,
     # The indices of the joints used for the initialization of the camera
     init_joints_idxs = torch.tensor(init_joints_idxs, device=device)
 
+    # init_t = camera.translation.detach()  # 将x、y坐标和估计的深度堆叠成相机平移向量
     edge_indices = kwargs.get('body_tri_idxs')
-    init_t = fitting.guess_init(body_model, gt_joints, edge_indices,
+    init_t = fitting.guess_init(body_model, gt_joints, gt_joints3d, edge_indices,
                                 use_vposer=use_vposer, vposer=vposer,
                                 pose_embedding=pose_embedding,
                                 model_type=kwargs.get('model_type', 'smpl'),
                                 focal_length=focal_length, dtype=dtype)
-
+    print("init_t: ", init_t.shape, init_t)
     camera_loss = fitting.create_loss('camera_init',
                                       trans_estimation=init_t,
                                       init_joints_idxs=init_joints_idxs,
                                       depth_loss_weight=depth_loss_weight,
                                       dtype=dtype).to(device=device)
     camera_loss.trans_estimation[:] = init_t
+    print("camera_loss.trans_estimation[:]: ", camera_loss.trans_estimation[:])
 
     loss = fitting.create_loss(loss_type=loss_type,
                                joint_weights=joint_weights,
@@ -315,6 +328,7 @@ def fit_single_frame(img,
 
         # Reset the parameters to estimate the initial translation of the
         # body model
+        # print("Reset the parameters body_model.parameters(): ", body_model.parameters())
         body_model.reset_params(body_pose=body_mean_pose)
 
         # If the distance between the 2D shoulders is smaller than a
@@ -326,9 +340,14 @@ def fit_single_frame(img,
 
         # Update the value of the translation of the camera as well as
         # the image center.
+        # print("camera.translation", camera.translation)
+        # print("camera.center", camera.center)
         with torch.no_grad():
             camera.translation[:] = init_t.view_as(camera.translation)
             camera.center[:] = torch.tensor([W, H], dtype=dtype) * 0.5
+
+        print("camera.translation", camera.translation)
+        print("camera.center", camera.center)
 
         # Re-enable gradient calculation for the camera translation
         camera.translation.requires_grad = True
@@ -341,7 +360,7 @@ def fit_single_frame(img,
 
         # The closure passed to the optimizer
         fit_camera = monitor.create_fitting_closure(
-            camera_optimizer, body_model, camera, gt_joints,
+            camera_optimizer, body_model, camera, gt_joints, gt_joints3d,
             camera_loss, create_graph=camera_create_graph,
             use_vposer=use_vposer, vposer=vposer,
             pose_embedding=pose_embedding,
@@ -358,6 +377,7 @@ def fit_single_frame(img,
                                                 pose_embedding=pose_embedding,
                                                 vposer=vposer)
 
+        print("After Camera initiation camera.translation", camera.translation)
         if interactive:
             if use_cuda and torch.cuda.is_available():
                 torch.cuda.synchronize()
@@ -401,7 +421,7 @@ def fit_single_frame(img,
             for opt_idx, curr_weights in enumerate(tqdm(opt_weights, desc='Stage')):
 
                 body_params = list(body_model.parameters())
-
+                # print("body_model.parameters(): ", body_model.parameters())
                 final_params = list(
                     filter(lambda x: x.requires_grad, body_params))
 
@@ -424,7 +444,7 @@ def fit_single_frame(img,
 
                 closure = monitor.create_fitting_closure(
                     body_optimizer, body_model,
-                    camera=camera, gt_joints=gt_joints,
+                    camera=camera, gt_joints=gt_joints, gt_joints3d=gt_joints3d,
                     joints_conf=joints_conf,
                     joint_weights=joint_weights,
                     loss=loss, create_graph=body_create_graph,
@@ -473,7 +493,8 @@ def fit_single_frame(img,
 
             results.append({'loss': final_loss_val,
                             'result': result})
-
+        print("result: ", results)
+        print("result_fn: ", result_fn)
         with open(result_fn, 'wb') as result_file:
             if len(results) > 1:
                 min_idx = (0 if results[0]['loss'] < results[1]['loss']
@@ -534,7 +555,6 @@ def fit_single_frame(img,
             fx=focal_length, fy=focal_length,
             cx=camera_center[0], cy=camera_center[1])
         scene.add(camera, pose=camera_pose)
-
         # Get the lights from the viewer
         light_nodes = monitor.mv.viewer._create_raymond_lights()
         for node in light_nodes:
@@ -551,5 +571,6 @@ def fit_single_frame(img,
         output_img = (color[:, :, :-1] * valid_mask +
                       (1 - valid_mask) * input_img)
 
-        img = pil_img.fromarray((output_img * 255).astype(np.uint8))
-        img.save(out_img_fn)
+
+
+    return output_img
