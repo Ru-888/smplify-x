@@ -38,7 +38,7 @@ from torch.utils.data import Dataset
 from utils import smpl_to_openpose
 
 Keypoints = namedtuple('Keypoints',
-                       ['keypoints', 'keypoints3d', 'gender_gt', 'gender_pd'])
+                       ['person_id', 'keypoints', 'keypoints3d', 'gender_gt', 'gender_pd'])
 
 Keypoints.__new__.__defaults__ = (None,) * len(Keypoints._fields)
 
@@ -59,6 +59,7 @@ def read_keypoints(keypoint_fn, use_hands=True, use_face=True,
     keypoints3d = []
     gender_pd = []
     gender_gt = []
+    person_id = []
     for idx, person_data in enumerate(data['people']):
         body_keypoints = np.array(person_data['pose_keypoints_2d'],
                                   dtype=np.float32)
@@ -67,6 +68,8 @@ def read_keypoints(keypoint_fn, use_hands=True, use_face=True,
         body_keypoints3d = np.array(person_data['pose_keypoints_3d'],
                                     dtype=np.float32)
         body_keypoints3d = body_keypoints3d.reshape([-1, 4])
+        personID = person_data['personID']
+
         if use_hands:
             left_hand_keyp = np.array(
                 person_data['hand_left_keypoints_2d'],
@@ -98,11 +101,11 @@ def read_keypoints(keypoint_fn, use_hands=True, use_face=True,
             gender_pd.append(person_data['gender_pd'])
         if 'gender_gt' in person_data:
             gender_gt.append(person_data['gender_gt'])
-
         keypoints.append(body_keypoints)
         keypoints3d.append(body_keypoints3d)
-
-    return Keypoints(keypoints=keypoints, keypoints3d=keypoints3d, gender_pd=gender_pd,
+        person_id.append(personID)
+    print("keypoints3d: ", len(keypoints3d), len(keypoints), len(person_id))
+    return Keypoints(person_id= person_id, keypoints=keypoints, keypoints3d=keypoints3d, gender_pd=gender_pd,
                      gender_gt=gender_gt)
 
 
@@ -194,9 +197,13 @@ class OpenPose(Dataset):
             return {}
         keypoints = np.stack(keyp_tuple.keypoints)
         keypoints3d = np.stack(keyp_tuple.keypoints3d)
+        personIDs = np.stack(keyp_tuple.person_id)
         output_dict = {'fn': img_fn,
                        'img_path': img_path,
-                       'keypoints': keypoints,'keypoints3d': keypoints3d,  'img': img}
+                       'person_ids': personIDs,
+                       'keypoints': keypoints,
+                       'keypoints3d': keypoints3d,
+                       'img': img}
         if keyp_tuple.gender_gt is not None:
             if len(keyp_tuple.gender_gt) > 0:
                 output_dict['gender_gt'] = keyp_tuple.gender_gt

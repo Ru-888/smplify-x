@@ -116,15 +116,15 @@ def smpl_to_openpose(model_type='smplx', use_hands=True, use_face=True,
         elif model_type == 'smplx':
             body_mapping = np.array([55, 12, 17, 19, 21, 16, 18, 20, 0, 2, 5,
                                      8, 1, 4, 7, 56, 57, 58, 59, 60, 61, 62,
-                                     63, 64, 65], dtype=np.int32)
+                                     63, 64, 65], dtype=np.int32)  #25
             mapping = [body_mapping]
             if use_hands:
                 lhand_mapping = np.array([20, 37, 38, 39, 66, 25, 26, 27,
                                           67, 28, 29, 30, 68, 34, 35, 36, 69,
-                                          31, 32, 33, 70], dtype=np.int32)
+                                          31, 32, 33, 70], dtype=np.int32)  #21
                 rhand_mapping = np.array([21, 52, 53, 54, 71, 40, 41, 42, 72,
                                           43, 44, 45, 73, 49, 50, 51, 74, 46,
-                                          47, 48, 75], dtype=np.int32)
+                                          47, 48, 75], dtype=np.int32) #21
 
                 mapping += [lhand_mapping, rhand_mapping]
             if use_face:

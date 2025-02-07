@@ -33,6 +33,12 @@ import torch.nn as nn
 from mesh_viewer import MeshViewer
 import utils
 
+def count_invalid_joints(gt_joints):
+    count = 0
+    for joint in gt_joints.squeeze().squeeze():
+        if joint[0]== 0 and joint[1]==0:
+            count+=1
+    return count
 
 @torch.no_grad()
 def guess_init(model,
@@ -83,7 +89,7 @@ def guess_init(model,
 
     output = model(body_pose=body_pose, return_verts=False,
                    return_full_pose=False)
-    # joints_3d = output.joints
+    # gt_joints_3d = output.joints
     joints_2d = joints_2d.to(device=gt_joints_3d.device)
 
     diff3d = []
@@ -370,18 +376,19 @@ class SMPLifyLoss(nn.Module):
                 body_model_faces, joint_weights,
                 use_vposer=False, pose_embedding=None,
                 **kwargs):
-        projected_joints = camera(body_model_output.joints)
-
         # Calculate the weights for each joints
         weights = (joint_weights * joints_conf
                    if self.use_joints_conf else
                    joint_weights).unsqueeze(dim=-1)
+        # 2D keypoints loss
+        projected_joints = camera(body_model_output.joints)
 
         # Calculate the distance of the projected joints from
         # the ground truth 2D detections
         joint_diff = self.robustifier(gt_joints - projected_joints)
         joint_loss = (torch.sum(weights ** 2 * joint_diff) *
                       self.data_weight ** 2)
+
         # 3d joint loss
         output_joints = body_model_output.joints
         joint3d_diff = self.robustifier(gt_joints3d - output_joints)
@@ -435,7 +442,8 @@ class SMPLifyLoss(nn.Module):
         pen_loss = 0.0
         # Calculate the loss due to interpenetration
         if (self.interpenetration and self.coll_loss_weight.item() > 0):
-            batch_size = projected_joints.shape[0]
+            # batch_size = projected_joints.shape[0]
+            batch_size = 1
             triangles = torch.index_select(
                 body_model_output.vertices, 1,
                 body_model_faces).view(batch_size, -1, 3, 3)
@@ -456,12 +464,10 @@ class SMPLifyLoss(nn.Module):
                       angle_prior_loss + pen_loss +
                       jaw_prior_loss + expression_loss +
                       left_hand_prior_loss + right_hand_prior_loss)
-        # total_loss = (joint_loss + joint3d_loss + pprior_loss + shape_loss +
+        # total_loss = (joint_loss + pprior_loss + shape_loss +
         #               angle_prior_loss + pen_loss +
         #               jaw_prior_loss + expression_loss +
         #               left_hand_prior_loss + right_hand_prior_loss)
-        # print("SMPLifyLoss: joint_loss", joint_loss)
-        # print("SMPLifyLoss: joint3d_loss", joint3d_loss)
         return total_loss
 
 
@@ -501,28 +507,26 @@ class SMPLifyCameraInitLoss(nn.Module):
 
     def forward(self, body_model_output, camera, gt_joints, gt_joints3d,
                 **kwargs):
-
         projected_joints = camera(body_model_output.joints)
-        # print("shape of gt_joints: ", gt_joints.shape)
-        # print("shape of gt_joints3d: ", gt_joints3d.shape)
-        # print("shape of projected_joints: ", projected_joints.shape)
         joint_error = torch.pow(
             torch.index_select(gt_joints, 1, self.init_joints_idxs) -
             torch.index_select(projected_joints, 1, self.init_joints_idxs),
             2)
         joint_loss = torch.sum(joint_error) * self.data_weight ** 2
-        # print("self.data_weight: ", self.data_weight)
+
         # 3d joints loss
         output_joints = body_model_output.joints
         diff = torch.index_select(gt_joints3d, 1, self.init_joints_idxs) - torch.index_select(output_joints, 1, self.init_joints_idxs)
 
         joint3d_error = torch.pow(diff, 2)
         joint3d_loss = torch.sum(joint3d_error) * self.data_weight ** 2
-        # print("SMPLifyCameraInitLoss: joint_loss, joint3d_loss ", joint_loss, joint3d_loss)
+
         depth_loss = 0.0
         if (self.depth_loss_weight.item() > 0 and self.trans_estimation is not
                 None):
             depth_loss = self.depth_loss_weight ** 2 * torch.sum((
                 camera.translation[:, 2] - self.trans_estimation[:, 2]).pow(2))
 
+        # return joint_loss + depth_loss
         return joint_loss + depth_loss + joint3d_loss
+

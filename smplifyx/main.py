@@ -19,6 +19,7 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
 
+import json
 import sys
 import os
 
@@ -29,7 +30,6 @@ import time
 import numpy as np
 import yaml
 import torch
-
 import smplx
 
 from utils import JointMapper
@@ -43,14 +43,36 @@ import PIL.Image as pil_img
 
 torch.backends.cudnn.enabled = False
 
+def person_mesh_position(keypoints3d):
+    keypoints3d = torch.tensor(keypoints3d).squeeze()
+    print("keypoints3d.shape: ", keypoints3d.shape, type(keypoints3d))
+    z_min_value = torch.min(keypoints3d[:, 2])
+    z_pelvis_value = keypoints3d[8, 2]
+    x_pelvis_value = keypoints3d[8, 0]
+    y_pelvis_value = keypoints3d[8, 1]
 
-def count_invalid_kpts(keypoints2d):
-    count =0
-    for keypoint in keypoints2d:
-        if keypoint[0]==0 and keypoint[1]==0:
+    mesh_coordinate = [x_pelvis_value, y_pelvis_value, z_pelvis_value-z_min_value]
+    # 将 tensor 转换为 float 类型
+    mesh_coordinate_json = [float(coord.item()) for coord in mesh_coordinate]
+    return mesh_coordinate_json
+
+
+def count_invalid_joints(gt_joints):
+    count = 0
+    for joint in gt_joints.squeeze().squeeze():
+        if joint[0]== 0 and joint[1]==0:
             count+=1
     return count
 
+
+def valid_body_tri_idxs(keypoints2d):
+    # keypoints2d = gt_joints.squeeze().squeeze()
+    body_tri_idxs=[5, 12, 2, 9]
+    valid_tag =True
+    for id in body_tri_idxs:
+        if keypoints2d[id][0] == 0 and keypoints2d[id][0] == 0:
+            valid_tag=False
+    return valid_tag
 
 def main(**args):
     output_folder = args.pop('output_folder')
@@ -214,6 +236,8 @@ def main(**args):
         fn = data['fn']
         keypoints = data['keypoints']
         keypoints3d = data['keypoints3d']
+        personIDs = data['person_ids']
+
         print('Processing: {}'.format(data['img_path']))
 
         curr_result_folder = osp.join(result_folder, fn)
@@ -222,32 +246,35 @@ def main(**args):
         curr_mesh_folder = osp.join(mesh_folder, fn)
         if not osp.exists(curr_mesh_folder):
             os.makedirs(curr_mesh_folder)
+        curr_img_folder = osp.join(output_folder, 'images')
+        if not osp.exists(curr_img_folder):
+            os.makedirs(curr_img_folder, exist_ok=True)
+        out_img_fn = osp.join(curr_img_folder, f'{fn}.png')
+        curr_mesh_fn_position_file = osp.join(curr_mesh_folder,
+                                           f'{fn}.json')
+        print("The number of people in 3d scene: ", keypoints3d.shape, len(personIDs))
 
-        print("The number of people in the image: ", keypoints.shape[0])
-        for person_id in range(keypoints.shape[0]):
-            if count_invalid_kpts(keypoints[person_id]) >= 10:
+        for index, person_id in enumerate(personIDs):
+            kpts= keypoints[[index]].squeeze()
+            print("kpts: ", kpts.shape, count_invalid_joints(kpts))
+            print("valid_body_tri_idxs: ", valid_body_tri_idxs(kpts))
+            if not valid_body_tri_idxs(kpts):
                 continue
-            if person_id >= max_persons and max_persons > 0:
+            if count_invalid_joints(kpts) > 5:
+                continue
+            if len(personIDs) >= max_persons and max_persons > 0:
                 continue
 
             curr_result_fn = osp.join(curr_result_folder,
-                                      '{:03d}.pkl'.format(person_id))
+                                      f'{str(person_id).zfill(6)}.pkl')
             curr_mesh_fn = osp.join(curr_mesh_folder,
-                                    '{:03d}.obj'.format(person_id))
-
-            curr_img_folder = osp.join(output_folder, 'images')
-            if not osp.exists(curr_img_folder):
-                os.makedirs(curr_img_folder, exist_ok=True)
-            # out_img_fn = osp.join(curr_img_folder,
-            #                       '{:03d}.png'.format(person_id))
-            out_img_fn = osp.join(curr_img_folder, f'{fn}.png')
-
+                                    f'{str(person_id).zfill(6)}.obj')
 
             if gender_lbl_type != 'none':
                 if gender_lbl_type == 'pd' and 'gender_pd' in data:
-                    gender = data['gender_pd'][person_id]
+                    gender = data['gender_pd'][index]
                 if gender_lbl_type == 'gt' and 'gender_gt' in data:
-                    gender = data['gender_gt'][person_id]
+                    gender = data['gender_gt'][index]
             else:
                 gender = input_gender
 
@@ -258,9 +285,7 @@ def main(**args):
             elif gender == 'male':
                 body_model = male_model
 
-
-
-            out_img = fit_single_frame(img, keypoints[[person_id]],keypoints3d[[person_id]],
+            out_img = fit_single_frame(img, keypoints[[index]], keypoints3d[[index]],
                              body_model=body_model,
                              camera=camera,
                              joint_weights=joint_weights,
@@ -279,9 +304,10 @@ def main(**args):
                              angle_prior=angle_prior,
                              **args)
             img = out_img
+
+
         img = pil_img.fromarray((img * 255).astype(np.uint8))
         img.save(out_img_fn)
-
 
 
     elapsed = time.time() - start
